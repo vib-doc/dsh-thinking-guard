@@ -1,5 +1,6 @@
 // 相对本文件解析，避免写死安装位置（否则随包分发会泄露维护者的本机目录）
 const mod = await import(new URL('../lib/index.js', import.meta.url).href);
+const { NOTICE_SOURCE } = mod;
 function h(config) {
   const handlers = new Map();
   mod.apply({ on: (e, f) => handlers.set(e, f), effect: (f) => f() }, config);
@@ -85,6 +86,23 @@ const check=(l,g,w)=>{const ok=g===w; ok?pass++:fail++; console.log(`[${ok?'PASS
   let threw=null;
   for(let i=0;i<s.length;i+=40){ try{ t.chunk({type:'reasoning-delta',index:0,text:s.slice(i,i+40)}); }catch(e){ threw=e; break; } }
   check('场景11 稀疏复读熔断且不抛异常', threw===null && !!t.tripped(), true); }
+
+// 12 回归：cancel 的 cause.kind 必须在 DSH 的合法枚举内
+//   合法枚举只有 user / parent / hook / disposed（dsh-session/lib/types/types.d.ts:148-157）。
+//   上游 1.0.2 传的是 'thinking-guard' ⇒ agent-loop 的 abortedCancelCause() 走
+//   `default: assertNever(cause)` 抛 unreachable variant ⇒ turn/end 的 reason 变成 null
+//   （熔断原因丢失）。此用例守住这一格。
+{ const t=h({thinkingOnlyMs:1e9,maxThinkingChars:300,checkEveryChars:1e9,notify:false}); t.start();
+  for(let i=0;i<20;i++) t.chunk({type:'reasoning-delta',index:0,text:'一段没有结论的思考内容，持续消耗资源而无任何产出。'});
+  const c=t.tripped()?.cause;
+  const legal=['user','parent','hook','disposed'];
+  check('场景12 cancel 的 kind 在合法枚举内', !!c && legal.includes(c.kind), true); }
+
+// 13 回归：注入消息的 source.kind 不能是已废弃的 'plugin'
+//   dsh-session-format-v3-to-v4 的校验器字面拒绝它（注释：refuses retired plugin wrappers）
+//   ⇒ 会话落盘时抛 "format v4 message requires a producer-owned source kind" ✗
+//   正确形状是 plugin:<名字>。此用例守住这一格。
+{ check("场景13 通知 source.kind 不是已废弃的 'plugin'", NOTICE_SOURCE && NOTICE_SOURCE.kind, 'plugin:thinking-guard'); }
 
 console.log(`\n合计：${pass} 通过 / ${fail} 失败`);
 process.exit(fail===0?0:1);
